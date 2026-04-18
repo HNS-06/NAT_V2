@@ -1,0 +1,101 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with adaptive preferences",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "preferences": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "email"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "A conversation session",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "lastMessage": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["chatId", "userId"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "An individual message within a chat",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string" },
+        "chatId": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "assistant"] },
+        "content": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string" },
+              "name": { "type": "string" },
+              "mimeType": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["role", "content", "timestamp", "chatId"]
+    },
+    "Memory": {
+      "title": "Memory",
+      "description": "Extracted user fact for persistence",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string" },
+        "value": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["key", "value", "timestamp"]
+    },
+    "Reminder": {
+      "title": "Reminder",
+      "description": "User scheduled task",
+      "type": "object",
+      "properties": {
+        "reminderId": { "type": "string" },
+        "task": { "type": "string" },
+        "dateTime": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["pending", "completed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["task", "dateTime", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Root user documents"
+    },
+    "/users/{userId}/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "User conversations"
+    },
+    "/users/{userId}/chats/{chatId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Individual messages in a chat"
+    },
+    "/users/{userId}/memories/{memoryId}": {
+      "schema": "Memory",
+      "description": "Stored user preferences and facts"
+    },
+    "/users/{userId}/reminders/{reminderId}": {
+      "schema": "Reminder",
+      "description": "User reminders and tasks"
+    }
+  }
+}

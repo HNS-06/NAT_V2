@@ -1,0 +1,90 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Validation helpers
+    function isValidUser(data) {
+      return data.userId == request.auth.uid 
+        && data.email is string 
+        && data.email.size() <= 256;
+    }
+
+    function isValidChat(data) {
+      return data.userId == request.auth.uid 
+        && data.title is string 
+        && data.title.size() <= 256;
+    }
+
+    function isValidMessage(data) {
+      return data.role in ['user', 'assistant'] 
+        && data.content is string 
+        && data.content.size() <= 10000
+        && data.chatId is string;
+    }
+
+    function isValidMemory(data) {
+      return data.key is string 
+        && data.key.size() <= 128 
+        && data.value is string 
+        && data.value.size() <= 1000;
+    }
+
+    function isValidReminder(data) {
+      return data.task is string 
+        && data.task.size() <= 256 
+        && data.status in ['pending', 'completed'];
+    }
+
+    // Collection matches
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'preferences']);
+
+      match /chats/{chatId} {
+        allow list, get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidChat(request.resource.data);
+        allow update: if isOwner(userId) && isValidChat(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'lastMessage', 'updatedAt']);
+        allow delete: if isOwner(userId);
+
+        match /messages/{messageId} {
+          allow list, get: if isOwner(userId);
+          allow create: if isOwner(userId) && isValidMessage(request.resource.data);
+        }
+      }
+
+      match /memories/{memoryId} {
+        allow list, get: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidMemory(request.resource.data);
+        allow delete: if isOwner(userId);
+      }
+
+      match /reminders/{reminderId} {
+        allow list, get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidReminder(request.resource.data);
+        allow update: if isOwner(userId) && isValidReminder(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['task', 'dateTime', 'status']);
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

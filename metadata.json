@@ -1,0 +1,6 @@
+{
+  "name": "NAT - Adaptive AI Assistant",
+  "description": "A fully functional, real-time AI assistant with memory, voice, and a distinctive Kinetic Noir aesthetic.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["AI Chat", "Memory System", "Voice Interaction"]
+}

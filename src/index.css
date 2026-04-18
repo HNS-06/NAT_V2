@@ -1,0 +1,87 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-plus: "Plus Jakarta Sans", sans-serif;
+  
+  --color-ink: #090e1c;
+  --color-primary: #b3feff;
+  --color-secondary: #c47fff;
+  --color-tertiary: #ff6b98;
+  --color-error: #ff716c;
+  --color-surface: #090e1c;
+  --color-surface-bright: #242b43;
+  --color-surface-container: #13192b;
+  --color-surface-container-low: #0d1323;
+  --color-surface-container-high: #181f33;
+  --color-surface-container-highest: #1e253b;
+  --color-surface-container-lowest: #000000;
+  --color-on-surface: #e1e4fa;
+  --color-on-surface-variant: #a6aabf;
+  --color-outline: #707588;
+  --color-outline-variant: #434759;
+}
+
+@layer base {
+  body {
+    @apply bg-ink text-on-surface font-plus selection:bg-tertiary selection:text-black;
+    overflow: hidden;
+  }
+}
+
+@layer components {
+  .ink-stroke {
+    box-shadow: 4px 4px 0px 0px #000000;
+  }
+  
+  .kinetic-tilt {
+    transform: rotate(-1.5deg);
+  }
+
+  .kinetic-tilt-alt {
+    transform: rotate(1.2deg);
+  }
+
+  .halftone {
+    background-image: radial-gradient(circle, currentColor 1px, transparent 1px);
+    background-size: 8px 8px;
+  }
+
+  .halftone-overlay {
+    background-image: radial-gradient(rgba(166, 170, 191, 0.1) 1px, transparent 0);
+    background-size: 8px 8px;
+  }
+
+  .glow-particle {
+    filter: blur(8px);
+    opacity: 0.4;
+  }
+}
+
+.speed-lines {
+  background-image: repeating-conic-gradient(from 0deg, transparent 0 10deg, rgba(179, 254, 255, 0.05) 10deg 11deg);
+}
+
+.zig-zag-wave {
+  clip-path: polygon(0% 50%, 5% 20%, 10% 80%, 15% 10%, 20% 90%, 25% 30%, 30% 70%, 35% 0%, 40% 100%, 45% 40%, 50% 60%, 55% 20%, 60% 80%, 65% 10%, 70% 90%, 75% 30%, 80% 70%, 85% 0%, 90% 100%, 95% 40%, 100% 50%);
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+
+/* Custom animations for the UI orbs */
+@keyframes float {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-10px) scale(1.05); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
