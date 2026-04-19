@@ -2,26 +2,64 @@ import React, { useState, useEffect, useRef } from "react";
 import * as Lucide from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { io, Socket } from "socket.io-client";
-import { auth, signInWithGoogle, db, storage } from "./lib/firebase";
-import { onAuthStateChanged, User } from "firebase/auth";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { 
-  collection, 
-  query, 
-  orderBy, 
-  onSnapshot, 
-  addDoc, 
-  serverTimestamp, 
-  updateDoc, 
-  doc,
-  limit,
-  deleteDoc,
-  getDocs
-} from "firebase/firestore";
+// Removed real firebase imports here to bypass the backend for localhost
 import { generateChatResponse, extractMemories, extractReminder, generateQuickReplies } from "./lib/gemini";
 import { Chat, Message, Memory, Reminder, Attachment } from "./types";
 
 const NAT_AVATAR = "https://lh3.googleusercontent.com/aida-public/AB6AXuBfxJF83ej6uHSK9s_gl7ZywQxQvG3FNUfiMKs6EJt6MWA8fRIq3Bq47ExnyNQKTtLYk8g_UNrWrgWNFp8nc-e9zUdRuhZeYszB__ba9Lm9VG2T9CtqmJkj55AnyJjbOFSfcv1IepdXLLPaQT4bT4mL7W7Nz0QVZAvaJL_PbgQBKQkYw6WVGL_5YFOpcIgge_mGK4YWuT8I4k4s_dqdfKamjC3vrUxtm2YZfbzk20jmlG3IdWg7zffdPrTw883gf3kHiHUY3L8a69M";
+
+// Functional Local DB Mock replacing Firebase (Persists to localStorage)
+type User = any;
+const auth = {};
+const storage = {};
+const MOCK_DB_KEY = "nat_app_db_v2";
+const db = {
+  listeners: [] as any[],
+  data: JSON.parse(localStorage.getItem(MOCK_DB_KEY) || '{"chats":[], "messages":[], "memories":[], "reminders":[]}'),
+  save() { localStorage.setItem(MOCK_DB_KEY, JSON.stringify(this.data)); },
+  notify(col: string) { this.listeners.filter(l => l.col === col).forEach(l => l.cb({ docs: (this.data[col] || []).map((d:any) => ({ id: d.id, data: () => d, ref: d.id })) })); }
+};
+const signInWithGoogle = async () => { return { uid: "local_mock", displayName: "Local User" }; };
+const onAuthStateChanged = (auth: any, cb: any) => { return () => {}; };
+const collection = (db: any, path: string) => path.split('/').pop() || path;
+const query = (col: any, ...args: any[]) => col;
+const orderBy = (...args: any[]) => args;
+const limit = (...args: any[]) => args;
+const doc = (db: any, path: string, id?: string) => id ? `${id}` : path.split('/').pop() || path;
+const serverTimestamp = () => new Date().toISOString();
+const onSnapshot = (col: any, cb: any) => {
+  if (!db.data[col]) db.data[col] = [];
+  db.listeners.push({ col, cb });
+  db.notify(col);
+  return () => { db.listeners = db.listeners.filter(l => l.cb !== cb); };
+};
+const addDoc = async (col: any, data: any) => {
+  if (!db.data[col]) db.data[col] = [];
+  const id = "doc_" + Date.now().toString() + Math.random().toString(36).substr(2, 5);
+  db.data[col].push({ id, ...data });
+  db.save();
+  db.notify(col);
+  return { id };
+};
+const updateDoc = async (docRef: any, data: any) => {
+  Object.keys(db.data).forEach(col => {
+    const idx = db.data[col].findIndex((d:any) => d.id === docRef);
+    if(idx !== -1) { Object.assign(db.data[col][idx], data); db.save(); db.notify(col); }
+  });
+};
+const deleteDoc = async (docRef: any) => {
+  let changed = false;
+  Object.keys(db.data).forEach(col => {
+    const origLen = db.data[col].length;
+    db.data[col] = db.data[col].filter((d:any) => d.id !== docRef);
+    if (db.data[col].length !== origLen) { changed = true; db.notify(col); }
+  });
+  if (changed) db.save();
+};
+const getDocs = async (col: any) => { return { docs: (db.data[col] || []).map((d:any) => ({ id: d.id, ref: d.id, data: () => d })) }; };
+const ref = (st: any, path: string) => ({ path, _mockUrl: '' });
+const uploadBytes = async (r: any, file: any) => { r._mockUrl = URL.createObjectURL(file); };
+const getDownloadURL = async (r: any) => r._mockUrl || "https://placeholder.com/file";
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -40,6 +78,8 @@ export default function App() {
   const [view, setView] = useState<"chronicle" | "transmission" | "nexus" | "vault">("chronicle");
   const [transmissionPrompt, setTransmissionPrompt] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isOutputOn, setIsOutputOn] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -80,6 +120,7 @@ export default function App() {
 
   const speak = (text: string) => {
     if ("speechSynthesis" in window) {
+      if (!isOutputOn) return;
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.9;
@@ -94,11 +135,19 @@ export default function App() {
       setUser(u);
       if (u) {
         const q = query(collection(db, `users/${u.uid}/chats`), orderBy("updatedAt", "desc"));
-        onSnapshot(q, (snapshot) => {
-          const chatList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Chat));
+        onSnapshot(q, async (snapshot) => {
+          const chatList = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Chat));
           setChats(chatList);
           if (chatList.length > 0 && !currentChatId) {
             setCurrentChatId(chatList[0].id);
+          } else if (chatList.length === 0 && !currentChatId) {
+            const newChat = await addDoc(collection(db, `users/${u.uid}/chats`), {
+              userId: u.uid,
+              title: "Neural Session",
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+            setCurrentChatId(newChat.id);
           }
         });
 
@@ -324,7 +373,11 @@ export default function App() {
           <Lucide.Cpu className="w-20 h-20 text-primary mx-auto mb-8 animate-pulse" />
           <h1 className="text-4xl font-black italic text-primary mb-8 tracking-tighter drop-shadow-[2px_2px_0_#ff6b98]">NAT_CHAT ACCESS</h1>
           <button 
-            onClick={signInWithGoogle}
+            onClick={async () => {
+              const result = await signInWithGoogle();
+              // Make sure to set user locally since auth listener is disabled
+              setUser(result);
+            }}
             className="w-full py-4 bg-primary text-background font-black border-4 border-black shadow-[4px_4px_0_black] hover:scale-105 active:scale-95 transition-all text-sm tracking-widest uppercase"
           >
             Authenticate Link
@@ -343,7 +396,7 @@ export default function App() {
             NAT_CHAT
           </h1>
         </div>
-        <nav className="hidden md:flex gap-8 items-center">
+        <nav className="hidden lg:flex gap-8 items-center">
           {["chronicle", "transmission", "nexus"].map((v) => (
             <button
               key={v}
@@ -359,13 +412,13 @@ export default function App() {
         <div className="flex items-center gap-4">
           <button 
             onClick={createNewChat}
-            className="flex items-center gap-2 bg-tertiary text-background px-6 py-2.5 font-black text-sm uppercase shadow-[6px_6px_0px_black] border-4 border-black hover:scale-105 active:scale-95 transition-all kinetic-tilt"
+            className="flex items-center gap-2 bg-tertiary text-background px-4 md:px-6 py-2.5 font-black text-sm uppercase shadow-[6px_6px_0px_black] border-4 border-black hover:scale-105 active:scale-95 transition-all kinetic-tilt"
           >
-            <Lucide.PlusCircle className="w-5 h-5" />
-            New Chat
+            <Lucide.PlusCircle className="w-5 h-5 shrink-0" />
+            <span className="hidden sm:inline">New Chat</span>
           </button>
-          <Lucide.User className="text-primary hover:scale-110 transition-transform cursor-pointer" />
-          <Lucide.Settings className="text-primary hover:scale-110 transition-transform cursor-pointer" />
+          <button onClick={() => alert("User Management Active")}><Lucide.User className="text-primary hover:scale-110 transition-transform cursor-pointer" /></button>
+          <button onClick={() => alert("Settings Active")}><Lucide.Settings className="text-primary hover:scale-110 transition-transform cursor-pointer" /></button>
         </div>
       </header>
 
@@ -384,7 +437,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* Sidebar (Chronicle View) */}
-      <aside className={`fixed left-0 top-0 h-screen flex flex-col pt-24 bg-ink border-r-4 border-black w-72 z-40 halftone-overlay transition-transform duration-500 shadow-[8px_0px_0px_0px_rgba(0,0,0,0.5)] ${view === "chronicle" ? "translate-x-0" : "-translate-x-full md:w-20"}`}>
+      <aside className={`fixed left-0 top-0 h-screen flex flex-col pt-24 bg-ink border-r-4 border-black w-72 z-40 halftone-overlay transition-transform duration-500 shadow-[8px_0px_0px_0px_rgba(0,0,0,0.5)] ${view === "chronicle" ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="p-6">
           <div className="flex items-center gap-3 mb-10">
             <div className="w-12 h-12 bg-gradient-to-br from-primary to-secondary rounded-full flex items-center justify-center border-2 border-black shadow-[3px_3px_0px_black]">
@@ -411,10 +464,10 @@ export default function App() {
           >
             Wipe Memory
           </button>
-          <div className="flex items-center gap-4 text-primary p-3 hover:bg-primary/10 font-bold text-xs cursor-pointer">
-            <Lucide.HelpCircle className="w-5" />
-            <span className={view === "chronicle" ? "uppercase tracking-widest" : "hidden"}>Support</span>
-          </div>
+          <button onClick={() => alert("Support Channel Opening...")} className="flex items-center gap-4 text-primary p-3 w-full hover:bg-primary/10 font-bold text-xs cursor-pointer">
+            <Lucide.HelpCircle className="w-5 shrink-0" />
+            <span className={view === "chronicle" ? "uppercase tracking-widest text-left" : "hidden"}>Support</span>
+          </button>
         </div>
       </aside>
 
@@ -422,16 +475,16 @@ export default function App() {
       {view !== "chronicle" && (
         <aside className="fixed left-0 top-0 h-screen flex flex-col pt-24 bg-ink border-r-4 border-black w-20 z-40 halftone-overlay ">
             <div className="flex flex-col items-center gap-8 px-2">
-                <div className="p-3 text-primary hover:bg-primary/10 transition-transform hover:skew-x-1 cursor-pointer" onClick={() => setView("chronicle")}>
+                <div className={`p-3 transition-transform hover:skew-x-1 cursor-pointer ${view === "chronicle" ? "bg-secondary text-ink rotate-1 shadow-[4px_4px_0px_#000000]" : "text-primary hover:bg-primary/10"}`} onClick={() => setView("chronicle")}>
                     <Lucide.MessageSquare className="w-6 h-6" />
                 </div>
-                <div className="p-3 text-primary hover:bg-primary/10 transition-transform hover:skew-x-1 cursor-pointer" onClick={() => setView("vault")}>
+                <div className={`p-3 transition-transform hover:skew-x-1 cursor-pointer ${view === "vault" ? "bg-secondary text-ink rotate-1 shadow-[4px_4px_0px_#000000]" : "text-primary hover:bg-primary/10"}`} onClick={() => setView("vault")}>
                     <Lucide.Database className="w-6 h-6" />
                 </div>
-                <div className="bg-secondary text-ink rotate-1 shadow-[4px_4px_0px_#000000] p-3 cursor-pointer" onClick={() => setView("transmission")}>
+                <div className={`p-3 transition-transform hover:skew-x-1 cursor-pointer ${view === "transmission" ? "bg-secondary text-ink rotate-1 shadow-[4px_4px_0px_#000000]" : "text-primary hover:bg-primary/10"}`} onClick={() => setView("transmission")}>
                     <Lucide.BookOpen className="w-6 h-6" />
                 </div>
-                <div className="p-3 text-primary hover:bg-primary/10 transition-transform hover:skew-x-1 cursor-pointer" onClick={() => setView("nexus")}>
+                <div className={`p-3 transition-transform hover:skew-x-1 cursor-pointer ${view === "nexus" ? "bg-secondary text-ink rotate-1 shadow-[4px_4px_0px_#000000]" : "text-primary hover:bg-primary/10"}`} onClick={() => setView("nexus")}>
                     <Lucide.Mic className="w-6 h-6" />
                 </div>
                 <div className="mt-auto mb-10 p-3 text-primary hover:bg-primary/10 transition-transform cursor-pointer">
@@ -442,7 +495,7 @@ export default function App() {
       )}
 
       {/* Main Container */}
-      <main className={`flex-1 transition-all duration-500 ${view === "chronicle" ? "ml-72" : "ml-20"} h-full relative`}>
+      <main className={`flex-1 transition-all duration-500 ${view === "chronicle" ? "ml-72" : "ml-20"} h-screen relative flex flex-col overflow-hidden pt-20 max-w-full`}>
         <AnimatePresence mode="wait">
           {view === "chronicle" && (
             <motion.div 
@@ -567,7 +620,7 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className={`${view === "chronicle" ? "hidden" : "flex"} w-full h-full p-8 flex-col relative overflow-hidden bg-gradient-to-br from-background via-[#1a0b2e] to-background`}
+              className={`${view === "chronicle" ? "hidden" : "flex"} w-full h-full p-8 flex-col relative overflow-y-auto scrollbar-none bg-gradient-to-br from-background via-[#1a0b2e] to-background`}
             >
               <div className="absolute top-20 right-40 w-4 h-4 rounded-full bg-primary glow-particle" />
               <div className="absolute bottom-40 left-20 w-3 h-3 rounded-full bg-tertiary glow-particle" />
@@ -663,11 +716,11 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="w-full h-full flex flex-col items-center justify-center relative bg-background speed-lines"
+              className="w-full h-full overflow-y-auto scrollbar-none relative bg-background speed-lines"
             >
               <div className="absolute inset-0 bg-radial-gradient from-surface-container-high/20 to-background pointer-events-none" />
-              <div className="relative z-10 flex flex-col items-center gap-12 w-full max-w-4xl px-6">
-                <div className="relative">
+              <div className="relative z-10 flex flex-col items-center gap-12 w-full max-w-4xl mx-auto px-6 py-12 min-h-full justify-center">
+                <div className="relative shrink-0">
                   <div className="absolute inset-0 bg-primary/20 blur-[80px] rounded-full scale-150 animate-pulse" />
                   <div className="w-64 h-64 md:w-80 md:h-80 bg-gradient-to-br from-primary to-primary-dim rounded-full flex items-center justify-center border-4 border-black ink-stroke kinetic-tilt relative overflow-hidden group">
                     <div className="absolute inset-0 opacity-10 halftone-overlay pointer-events-none" />
@@ -716,7 +769,16 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-wrap justify-center gap-8 md:gap-16 mt-8">
-                  <NexusButton icon={<Lucide.MicOff />} label="Mute" color="bg-secondary" shadow="shadow-[0px_8px_0px_#500086]" />
+                  <NexusButton 
+                    icon={isMuted ? <Lucide.MicOff /> : <Lucide.Mic />} 
+                    label={isMuted ? "Unmute" : "Mute"} 
+                    color={isMuted ? "bg-primary" : "bg-secondary"} 
+                    shadow="shadow-[0px_8px_0px_#500086]" 
+                    onClick={() => {
+                        setIsMuted(!isMuted);
+                        if (!isMuted && isListening) toggleListening(); // Turn off mic if muting
+                    }} 
+                  />
                   <NexusButton 
                     icon={<Lucide.PhoneOff />} 
                     label="End Link" 
@@ -725,7 +787,13 @@ export default function App() {
                     onClick={() => { setView("chronicle"); setIsListening(false); }}
                     large 
                   />
-                  <NexusButton icon={<Lucide.Volume2 />} label="Output" color="bg-primary" shadow="shadow-[0px_8px_0px_#006264]" />
+                  <NexusButton 
+                    icon={isOutputOn ? <Lucide.Volume2 /> : <Lucide.VolumeX />} 
+                    label={isOutputOn ? "Quiet" : "Output"} 
+                    color={isOutputOn ? "bg-primary" : "bg-secondary"} 
+                    shadow="shadow-[0px_8px_0px_#006264]" 
+                    onClick={() => setIsOutputOn(!isOutputOn)} 
+                  />
                 </div>
 
                 <div className="max-w-xl w-full px-6 mt-16">
@@ -747,7 +815,7 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="w-full h-full flex flex-col p-8 md:p-12 halftone-overlay bg-background overflow-y-auto"
+              className="w-full h-full flex flex-col p-8 md:p-12 hover-scroll halftone-overlay bg-background overflow-y-auto scrollbar-none"
             >
               <div className="max-w-5xl mx-auto w-full space-y-12">
                 <header className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b-4 border-black pb-8">

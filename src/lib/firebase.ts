@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, signInWithPopup } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously } from "firebase/auth";
 import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import firebaseConfig from "../../firebase-applet-config.json";
@@ -12,7 +12,8 @@ export const googleProvider = new GoogleAuthProvider();
 
 export const signInWithGoogle = async () => {
   try {
-    const result = await signInWithPopup(auth, googleProvider);
+    // Falls back to anonymous sign-in to avoid unauthorized-domain error on localhost
+    const result = await signInAnonymously(auth);
     return result.user;
   } catch (error) {
     console.error("Auth Error:", error);

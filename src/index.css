@@ -4,11 +4,20 @@
 @theme {
   --font-plus: "Plus Jakarta Sans", sans-serif;
   
+  /* Core palette */
   --color-ink: #090e1c;
+  --color-background: #090e1c;
   --color-primary: #b3feff;
+  --color-primary-dim: #7fd8d9;
+  --color-primary-container: #002020;
   --color-secondary: #c47fff;
+  --color-secondary-container: #1a0938;
   --color-tertiary: #ff6b98;
+  --color-tertiary-container: #3d0020;
+  --color-on-tertiary: #090e1c;
   --color-error: #ff716c;
+
+  /* Surface scale */
   --color-surface: #090e1c;
   --color-surface-bright: #242b43;
   --color-surface-container: #13192b;
@@ -16,8 +25,11 @@
   --color-surface-container-high: #181f33;
   --color-surface-container-highest: #1e253b;
   --color-surface-container-lowest: #000000;
+
+  /* On-surface */
   --color-on-surface: #e1e4fa;
   --color-on-surface-variant: #a6aabf;
+  --color-on-background: #e1e4fa;
   --color-outline: #707588;
   --color-outline-variant: #434759;
 }
