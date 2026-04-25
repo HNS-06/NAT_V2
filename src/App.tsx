@@ -10,55 +10,149 @@ const NAT_AVATAR = "https://lh3.googleusercontent.com/aida-public/AB6AXuBfxJF83e
 
 // Functional Local DB Mock replacing Firebase (Persists to localStorage)
 type User = any;
-const auth = {};
+const auth = { currentUser: null as User | null };
 const storage = {};
-const MOCK_DB_KEY = "nat_app_db_v2";
+const MOCK_DB_KEY = "nat_app_db_v3";
+const MOCK_AUTH_KEY = "nat_app_auth_v1";
+const authListeners = new Set<(user: User | null) => void>();
+const readMockDb = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MOCK_DB_KEY) || "{}");
+    if (parsed && typeof parsed === "object" && parsed.collections && typeof parsed.collections === "object") {
+      return parsed as { collections: Record<string, any[]> };
+    }
+  } catch {}
+  return { collections: {} as Record<string, any[]> };
+};
+const persistedUser = (() => {
+  try {
+    return JSON.parse(localStorage.getItem(MOCK_AUTH_KEY) || "null");
+  } catch {
+    return null;
+  }
+})();
+auth.currentUser = persistedUser;
 const db = {
   listeners: [] as any[],
-  data: JSON.parse(localStorage.getItem(MOCK_DB_KEY) || '{"chats":[], "messages":[], "memories":[], "reminders":[]}'),
+  data: readMockDb(),
   save() { localStorage.setItem(MOCK_DB_KEY, JSON.stringify(this.data)); },
-  notify(col: string) { this.listeners.filter(l => l.col === col).forEach(l => l.cb({ docs: (this.data[col] || []).map((d:any) => ({ id: d.id, data: () => d, ref: d.id })) })); }
+  ensureCollection(path: string) {
+    if (!this.data.collections[path]) this.data.collections[path] = [];
+    return this.data.collections[path];
+  },
+  notify(path: string) {
+    this.listeners
+      .filter(l => l.path === path)
+      .forEach(l => l.cb(createSnapshot(path, l.constraints)));
+  }
 };
-const signInWithGoogle = async () => { return { uid: "local_mock", displayName: "Local User" }; };
-const onAuthStateChanged = (auth: any, cb: any) => { return () => {}; };
-const collection = (db: any, path: string) => path.split('/').pop() || path;
-const query = (col: any, ...args: any[]) => col;
-const orderBy = (...args: any[]) => args;
-const limit = (...args: any[]) => args;
-const doc = (db: any, path: string, id?: string) => id ? `${id}` : path.split('/').pop() || path;
+const notifyAuthListeners = () => {
+  authListeners.forEach((listener) => listener(auth.currentUser));
+};
+const signInWithGoogle = async () => {
+  const user = { uid: "local_mock", displayName: "Local User" };
+  auth.currentUser = user;
+  localStorage.setItem(MOCK_AUTH_KEY, JSON.stringify(user));
+  notifyAuthListeners();
+  return user;
+};
+const onAuthStateChanged = (authInstance: any, cb: any) => {
+  authListeners.add(cb);
+  cb(authInstance.currentUser ?? null);
+  return () => { authListeners.delete(cb); };
+};
+const collection = (db: any, path: string) => path;
+const query = (col: any, ...constraints: any[]) => ({ path: col, constraints });
+const orderBy = (field: string, direction: "asc" | "desc" = "asc") => ({ type: "orderBy", field, direction });
+const limit = (count: number) => ({ type: "limit", count });
+const doc = (db: any, path: string, id?: string) => {
+  if (id) {
+    return { collectionPath: path, id };
+  }
+  const segments = path.split("/");
+  return {
+    collectionPath: segments.slice(0, -1).join("/"),
+    id: segments[segments.length - 1]
+  };
+};
 const serverTimestamp = () => new Date().toISOString();
-const onSnapshot = (col: any, cb: any) => {
-  if (!db.data[col]) db.data[col] = [];
-  db.listeners.push({ col, cb });
-  db.notify(col);
-  return () => { db.listeners = db.listeners.filter(l => l.cb !== cb); };
+const applyConstraints = (items: any[], constraints: any[] = []) => {
+  let result = [...items];
+  for (const constraint of constraints) {
+    if (!constraint || typeof constraint !== "object") continue;
+    if (constraint.type === "orderBy") {
+      result.sort((a, b) => {
+        const aValue = a?.[constraint.field];
+        const bValue = b?.[constraint.field];
+        if (aValue === bValue) return 0;
+        const comparison = aValue > bValue ? 1 : -1;
+        return constraint.direction === "desc" ? -comparison : comparison;
+      });
+    }
+    if (constraint.type === "limit") {
+      result = result.slice(0, constraint.count);
+    }
+  }
+  return result;
+};
+const createSnapshot = (path: string, constraints: any[] = []) => {
+  const docs = applyConstraints(db.ensureCollection(path), constraints).map((d: any) => ({
+    id: d.id,
+    data: () => d,
+    ref: { collectionPath: path, id: d.id }
+  }));
+  return { docs };
+};
+const onSnapshot = (source: any, cb: any) => {
+  const path = typeof source === "string" ? source : source.path;
+  const constraints = typeof source === "string" ? [] : source.constraints || [];
+  db.ensureCollection(path);
+  const listener = { path, constraints, cb };
+  db.listeners.push(listener);
+  cb(createSnapshot(path, constraints));
+  return () => { db.listeners = db.listeners.filter(l => l !== listener); };
 };
 const addDoc = async (col: any, data: any) => {
-  if (!db.data[col]) db.data[col] = [];
+  const path = typeof col === "string" ? col : col.path;
+  const collectionItems = db.ensureCollection(path);
   const id = "doc_" + Date.now().toString() + Math.random().toString(36).substr(2, 5);
-  db.data[col].push({ id, ...data });
+  collectionItems.push({ id, ...data });
   db.save();
-  db.notify(col);
+  db.notify(path);
   return { id };
 };
 const updateDoc = async (docRef: any, data: any) => {
-  Object.keys(db.data).forEach(col => {
-    const idx = db.data[col].findIndex((d:any) => d.id === docRef);
-    if(idx !== -1) { Object.assign(db.data[col][idx], data); db.save(); db.notify(col); }
-  });
+  const collectionItems = db.ensureCollection(docRef.collectionPath);
+  const idx = collectionItems.findIndex((d: any) => d.id === docRef.id);
+  if (idx !== -1) {
+    Object.assign(collectionItems[idx], data);
+    db.save();
+    db.notify(docRef.collectionPath);
+  }
 };
 const deleteDoc = async (docRef: any) => {
-  let changed = false;
-  Object.keys(db.data).forEach(col => {
-    const origLen = db.data[col].length;
-    db.data[col] = db.data[col].filter((d:any) => d.id !== docRef);
-    if (db.data[col].length !== origLen) { changed = true; db.notify(col); }
-  });
-  if (changed) db.save();
+  const collectionItems = db.ensureCollection(docRef.collectionPath);
+  const nextItems = collectionItems.filter((d: any) => d.id !== docRef.id);
+  if (nextItems.length !== collectionItems.length) {
+    db.data.collections[docRef.collectionPath] = nextItems;
+    db.save();
+    db.notify(docRef.collectionPath);
+  }
 };
-const getDocs = async (col: any) => { return { docs: (db.data[col] || []).map((d:any) => ({ id: d.id, ref: d.id, data: () => d })) }; };
+const getDocs = async (source: any) => {
+  const path = typeof source === "string" ? source : source.path;
+  const constraints = typeof source === "string" ? [] : source.constraints || [];
+  return createSnapshot(path, constraints);
+};
 const ref = (st: any, path: string) => ({ path, _mockUrl: '' });
-const uploadBytes = async (r: any, file: any) => { r._mockUrl = URL.createObjectURL(file); };
+const uploadBytes = async (r: any, file: any) => {
+  r._mockUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+};
 const getDownloadURL = async (r: any) => r._mockUrl || "https://placeholder.com/file";
 
 export default function App() {
