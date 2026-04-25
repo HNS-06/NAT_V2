@@ -3,7 +3,7 @@ import * as Lucide from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { io, Socket } from "socket.io-client";
 // Removed real firebase imports here to bypass the backend for localhost
-import { generateChatResponse, extractMemories, extractReminder, generateQuickReplies } from "./lib/gemini";
+import { generateChatResponse, extractMemories, extractReminder, generateQuickReplies } from "./lib/ai";
 import { Chat, Message, Memory, Reminder, Attachment } from "./types";
 
 const NAT_AVATAR = "https://lh3.googleusercontent.com/aida-public/AB6AXuBfxJF83ej6uHSK9s_gl7ZywQxQvG3FNUfiMKs6EJt6MWA8fRIq3Bq47ExnyNQKTtLYk8g_UNrWrgWNFp8nc-e9zUdRuhZeYszB__ba9Lm9VG2T9CtqmJkj55AnyJjbOFSfcv1IepdXLLPaQT4bT4mL7W7Nz0QVZAvaJL_PbgQBKQkYw6WVGL_5YFOpcIgge_mGK4YWuT8I4k4s_dqdfKamjC3vrUxtm2YZfbzk20jmlG3IdWg7zffdPrTw883gf3kHiHUY3L8a69M";
@@ -241,8 +241,7 @@ export default function App() {
         };
       });
 
-      // Prepare Gemini parts
-      const geminiAttachments = await Promise.all(
+      const apiAttachments = await Promise.all(
         files.map(async (file) => {
           const reader = new FileReader();
           const base64Promise = new Promise<string>((resolve) => {
@@ -250,11 +249,11 @@ export default function App() {
           });
           reader.readAsDataURL(file);
           const base64 = await base64Promise;
-          return { data: base64, mimeType: file.type };
+          return { data: base64, mimeType: file.type, name: file.name };
         })
       );
 
-      const stream = await generateChatResponse(text, history, memories, geminiAttachments);
+      const stream = await generateChatResponse(text, history, memories, apiAttachments);
       let fullResponse = "";
       
       const messageRef = await addDoc(collection(db, `users/${user.uid}/chats/${currentChatId}/messages`), {

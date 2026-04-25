@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: nat-adaptive-ai-assistant
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: AI_PROVIDER
+        value: auto
+      - key: AI_FALLBACK_ORDER
+        value: groq,gemini
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

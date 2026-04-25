@@ -1,24 +1,72 @@
-<<<<<<< HEAD
-# NAT_V2
-=======
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# NAT Adaptive AI Assistant
 
-# Run and deploy your AI Studio app
+Single-service React + Express app with:
 
-This contains everything you need to run your app locally.
+- Vite frontend
+- Express API server
+- Socket.IO realtime layer
+- Multi-provider AI backend
+- Current production providers: `groq`, `gemini`
 
-View your app in AI Studio: https://ai.studio/apps/9274d400-ced8-41c2-8756-054e8081b9af
+## Local Run
 
-## Run Locally
+Prerequisites:
 
-**Prerequisites:**  Node.js
+- Node.js 20+
 
+Commands:
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
->>>>>>> 2638b22 (initial commit)
+```bash
+npm install
+npm run dev
+```
+
+App URL:
+
+- `http://localhost:3000` by default
+
+## Environment Variables
+
+Copy `.env.example` into `.env` and set the values you need.
+
+Required for AI:
+
+- `GROQ_API_KEY`
+- `GEMINI_API_KEY`
+
+Recommended:
+
+- `AI_PROVIDER=auto`
+- `AI_FALLBACK_ORDER=groq,gemini`
+
+## Production Build
+
+```bash
+npm run build
+npm start
+```
+
+The server serves `dist/` automatically when `NODE_ENV=production`.
+
+## Render Deployment
+
+This repo includes `render.yaml` for a Render web service deployment.
+
+Manual Render settings:
+
+- Runtime: `Node`
+- Build Command: `npm install && npm run build`
+- Start Command: `npm start`
+- Health Check Path: `/api/health`
+
+Environment variables to set in Render:
+
+- `AI_PROVIDER=auto`
+- `AI_FALLBACK_ORDER=groq,gemini`
+- `GROQ_API_KEY`
+- `GEMINI_API_KEY`
+
+Notes:
+
+- Render provides `NODE_ENV=production` at runtime for Node services.
+- Render web services support WebSockets, which fits this app's Socket.IO server.

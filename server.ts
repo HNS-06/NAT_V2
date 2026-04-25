@@ -1,9 +1,11 @@
+import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+import { getAiRuntimeSummary, registerAiRoutes } from "./src/server/ai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,12 +20,20 @@ async function startServer() {
     }
   });
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
+
+  app.use(express.json({ limit: "25mb" }));
 
   // Basic API routes
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", version: "4.2.0-LUMINA" });
+    res.json({
+      status: "ok",
+      version: "4.2.0-LUMINA",
+      ai: getAiRuntimeSummary(),
+    });
   });
+
+  registerAiRoutes(app);
 
   // Socket.IO Logic
   io.on("connection", (socket) => {
