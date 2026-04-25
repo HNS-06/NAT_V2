@@ -2,8 +2,10 @@ import React, { useState, useEffect, useRef } from "react";
 import * as Lucide from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { io, Socket } from "socket.io-client";
-// Removed real firebase imports here to bypass the backend for localhost
-import { generateChatResponse, extractMemories, extractReminder, generateQuickReplies } from "./lib/ai";
+import { sendChatMessage, sendVoiceMessage } from "./lib/appApi";
+import { loadProfile, loadSettings, saveChats, saveMemories, saveProfile, saveReminders } from "./lib/clientStore";
+import { useSettingsState } from "./hooks/useSettingsState";
+import { useVoiceState } from "./hooks/useVoiceState";
 import { Chat, Message, Memory, Reminder, Attachment } from "./types";
 
 const NAT_AVATAR = "https://lh3.googleusercontent.com/aida-public/AB6AXuBfxJF83ej6uHSK9s_gl7ZywQxQvG3FNUfiMKs6EJt6MWA8fRIq3Bq47ExnyNQKTtLYk8g_UNrWrgWNFp8nc-e9zUdRuhZeYszB__ba9Lm9VG2T9CtqmJkj55AnyJjbOFSfcv1IepdXLLPaQT4bT4mL7W7Nz0QVZAvaJL_PbgQBKQkYw6WVGL_5YFOpcIgge_mGK4YWuT8I4k4s_dqdfKamjC3vrUxtm2YZfbzk20jmlG3IdWg7zffdPrTw883gf3kHiHUY3L8a69M";
@@ -35,7 +37,14 @@ auth.currentUser = persistedUser;
 const db = {
   listeners: [] as any[],
   data: readMockDb(),
-  save() { localStorage.setItem(MOCK_DB_KEY, JSON.stringify(this.data)); },
+  save() {
+    const settings = loadSettings();
+    if (!settings.dataPersistence) {
+      localStorage.removeItem(MOCK_DB_KEY);
+      return;
+    }
+    localStorage.setItem(MOCK_DB_KEY, JSON.stringify(this.data));
+  },
   ensureCollection(path: string) {
     if (!this.data.collections[path]) this.data.collections[path] = [];
     return this.data.collections[path];
@@ -50,7 +59,13 @@ const notifyAuthListeners = () => {
   authListeners.forEach((listener) => listener(auth.currentUser));
 };
 const signInWithGoogle = async () => {
-  const user = { uid: "local_mock", displayName: "Local User" };
+  const persistedProfile = loadProfile(NAT_AVATAR);
+  const user = {
+    uid: persistedProfile.uid,
+    displayName: persistedProfile.name,
+    email: persistedProfile.email,
+    photoURL: persistedProfile.avatar,
+  };
   auth.currentUser = user;
   localStorage.setItem(MOCK_AUTH_KEY, JSON.stringify(user));
   notifyAuthListeners();
@@ -156,6 +171,7 @@ const uploadBytes = async (r: any, file: any) => {
 const getDownloadURL = async (r: any) => r._mockUrl || "https://placeholder.com/file";
 
 export default function App() {
+  const { settings, updateSetting } = useSettingsState();
   const [user, setUser] = useState<User | null>(null);
   const [chats, setChats] = useState<Chat[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
@@ -168,60 +184,53 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [memoryNotification, setMemoryNotification] = useState<string | null>(null);
   const [isTyping, setIsTyping] = useState(false);
-  const [isListening, setIsListening] = useState(false);
   const [view, setView] = useState<"chronicle" | "transmission" | "nexus" | "vault">("chronicle");
   const [transmissionPrompt, setTransmissionPrompt] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isOutputOn, setIsOutputOn] = useState(true);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [transcriptHistory, setTranscriptHistory] = useState<string[]>([]);
+  const [isSending, setIsSending] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    typeof Notification !== "undefined" ? Notification.permission : "default",
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputBarRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<Socket | null>(null);
-  const recognitionRef = useRef<any>(null);
+  const reminderTimersRef = useRef<number[]>([]);
+  const voiceTranscriptHandlerRef = useRef<(transcript: string) => Promise<void> | void>(() => undefined);
+  const profileRef = useRef(loadProfile(NAT_AVATAR));
+  const {
+    isListening,
+    transcript,
+    interimTranscript,
+    voiceError,
+    waveform,
+    recordings,
+    startListening,
+    stopListening,
+    setTranscript,
+    speak,
+  } = useVoiceState({
+    voiceEnabled: settings.voiceEnabled && !isMuted,
+    outputEnabled: isOutputOn && settings.voiceEnabled,
+    onTranscriptFinal: (finalTranscript) => voiceTranscriptHandlerRef.current(finalTranscript),
+  });
 
-  // Initialize Speech Recognition
-  useEffect(() => {
-    if (typeof window !== "undefined" && ("webkitSpeechRecognition" in window || "speechRecognition" in window)) {
-      const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).speechRecognition;
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = true;
-
-      recognitionRef.current.onresult = (event: any) => {
-        const transcript = Array.from(event.results)
-          .map((result: any) => result[0])
-          .map((result) => result.transcript)
-          .join("");
-        setInputText(transcript);
-      };
-
-      recognitionRef.current.onend = () => {
-        setIsListening(false);
-      };
-    }
-  }, []);
-
-  const toggleListening = () => {
+  const toggleListening = async () => {
     if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
-    } else {
-      recognitionRef.current?.start();
-      setIsListening(true);
-      if (view !== "nexus") setView("nexus");
+      stopListening();
+      return;
     }
-  };
 
-  const speak = (text: string) => {
-    if ("speechSynthesis" in window) {
-      if (!isOutputOn) return;
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.9;
-      utterance.pitch = 0.9;
-      utterance.voice = window.speechSynthesis.getVoices().find(v => v.name.includes("Google") || v.lang.includes("en-US")) || null;
-      window.speechSynthesis.speak(utterance);
+    if (view !== "nexus") {
+      setView("nexus");
     }
+    await startListening();
   };
 
   useEffect(() => {
@@ -265,6 +274,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!socketRef.current || !inputText.trim() || !currentChatId) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      socketRef.current?.emit("typing", { chatId: currentChatId, active: true });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [currentChatId, inputText]);
+
+  useEffect(() => {
     if (user && currentChatId) {
       const q = query(collection(db, `users/${user.uid}/chats/${currentChatId}/messages`), orderBy("timestamp", "asc"));
       return onSnapshot(q, (snapshot) => {
@@ -273,17 +294,145 @@ export default function App() {
       });
     }
   }, [user, currentChatId]);
+  useEffect(() => {
+    if (voiceError) {
+      setErrorMessage(voiceError);
+    }
+  }, [voiceError]);
 
-  const handleSendMessage = async (overrideText?: string) => {
-    const textToSend = overrideText || inputText;
-    if ((!textToSend.trim() && pendingFiles.length === 0) || !user || !currentChatId) return;
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
 
-    const text = textToSend;
-    const files = [...pendingFiles];
-    setInputText("");
-    setPendingFiles([]);
+    profileRef.current = {
+      uid: user.uid,
+      name: user.displayName || "Local User",
+      email: user.email || "local.user@nat.chat",
+      avatar: user.photoURL || NAT_AVATAR,
+    };
+    saveProfile(profileRef.current);
+  }, [user]);
+
+  useEffect(() => {
+    saveChats(
+      chats.map((chat) => ({
+        ...chat,
+        messages: chat.id === currentChatId ? messages : [],
+      })),
+      settings.dataPersistence,
+    );
+  }, [chats, currentChatId, messages, settings.dataPersistence]);
+
+  useEffect(() => {
+    saveMemories(memories, settings.dataPersistence);
+  }, [memories, settings.dataPersistence]);
+
+  useEffect(() => {
+    saveReminders(reminders, settings.dataPersistence);
+  }, [reminders, settings.dataPersistence]);
+
+  useEffect(() => {
+    if (!settings.notificationsEnabled || typeof Notification === "undefined") {
+      return;
+    }
+    setNotificationPermission(Notification.permission);
+  }, [settings.notificationsEnabled]);
+
+  useEffect(() => {
+    if (settings.dataPersistence) {
+      return;
+    }
+    localStorage.removeItem(MOCK_DB_KEY);
+    localStorage.removeItem("nat_chat_sessions_v1");
+    localStorage.removeItem("nat_chat_memories_v1");
+    localStorage.removeItem("nat_chat_reminders_v1");
+  }, [settings.dataPersistence]);
+
+  useEffect(() => {
+    if (!settings.voiceEnabled) {
+      stopListening();
+      window.speechSynthesis?.cancel();
+    }
+  }, [settings.voiceEnabled, stopListening]);
+
+  const requestNotifications = async () => {
+    if (typeof Notification === "undefined") {
+      setErrorMessage("Browser notifications are not supported here.");
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+  };
+
+  const scheduleReminderNotification = (reminder: Reminder | null) => {
+    if (!reminder?.dateTime || !settings.notificationsEnabled) {
+      return;
+    }
+
+    const delay = new Date(reminder.dateTime).getTime() - Date.now();
+    if (delay <= 0 || delay > 2147483647) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        new Notification("NAT Reminder", {
+          body: reminder.task,
+        });
+      }
+    }, delay);
+    reminderTimersRef.current.push(timer);
+  };
+
+  const ensureChatSession = async () => {
+    if (user && currentChatId) {
+      return currentChatId;
+    }
+    const created = await addDoc(collection(db, `users/${user!.uid}/chats`), {
+      userId: user!.uid,
+      title: "Neural Session",
+      lastMessage: "",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    setCurrentChatId(created.id);
+    return created.id;
+  };
+
+  const persistAssistantArtifacts = async (chatId: string, nextMemories: Memory[], reminder: Reminder | null) => {
+    const memoryEntries: Memory[] = [];
+    for (const memory of nextMemories) {
+      const entry = { ...memory, id: memory.id || `mem_${Date.now()}` };
+      memoryEntries.push(entry);
+      await addDoc(collection(db, `users/${user!.uid}/memories`), {
+        ...entry,
+        timestamp: entry.timestamp || serverTimestamp(),
+      });
+    }
+
+    if (memoryEntries.length > 0) {
+      setMemoryNotification(memoryEntries[0].key);
+      setTimeout(() => setMemoryNotification(null), 3000);
+    }
+
+    if (reminder) {
+      await addDoc(collection(db, `users/${user!.uid}/reminders`), reminder);
+      scheduleReminderNotification(reminder);
+    }
+  };
+
+  const processTurn = async (text: string, files: File[], source: "chat" | "voice" = "chat") => {
+    if (!user || isSending || (!text.trim() && files.length === 0)) {
+      return;
+    }
+
+    setErrorMessage(null);
+    setIsSending(true);
+    setIsTyping(true);
     setSuggestions([]);
 
+    const chatId = await ensureChatSession();
     let uploadedAttachments: Attachment[] = [];
 
     if (files.length > 0) {
@@ -294,122 +443,75 @@ export default function App() {
             const fileRef = ref(storage, `users/${user.uid}/uploads/${Date.now()}_${file.name}`);
             await uploadBytes(fileRef, file);
             const url = await getDownloadURL(fileRef);
-            return {
-              url,
-              name: file.name,
-              mimeType: file.type
-            };
-          })
+            return { url, name: file.name, mimeType: file.type };
+          }),
         );
-      } catch (err) {
-        console.error("Upload Error:", err);
       } finally {
         setUploading(false);
       }
     }
 
-    await addDoc(collection(db, `users/${user.uid}/chats/${currentChatId}/messages`), {
+    await addDoc(collection(db, `users/${user.uid}/chats/${chatId}/messages`), {
       role: "user",
       content: text,
       timestamp: serverTimestamp(),
-      chatId: currentChatId,
-      attachments: uploadedAttachments
+      chatId,
+      attachments: uploadedAttachments,
     });
 
-    await updateDoc(doc(db, `users/${user.uid}/chats/${currentChatId}`), {
-      lastMessage: text || (files.length > 0 ? `Sent ${files.length} file(s)` : ""),
-      updatedAt: serverTimestamp()
+    await updateDoc(doc(db, `users/${user.uid}/chats/${chatId}`), {
+      lastMessage: text || (uploadedAttachments.length > 0 ? `Sent ${uploadedAttachments.length} file(s)` : ""),
+      updatedAt: serverTimestamp(),
     });
-
-    setIsTyping(true);
 
     try {
-      const history = messages.map(m => {
-        const parts: any[] = [{ text: m.content }];
-        if (m.attachments && m.attachments.length > 0) {
-          parts[0].text += `\n(User attached ${m.attachments.length} file(s): ${m.attachments.map(a => a.name).join(", ")})`;
-        }
-        return {
-          role: m.role === "user" ? "user" as const : "model" as const,
-          parts
-        };
+      const history = messages.map((message) => ({
+        role: message.role === "user" ? ("user" as const) : ("model" as const),
+        parts: [{ text: message.content }],
+      }));
+      const payload =
+        source === "voice"
+          ? await sendVoiceMessage({ sessionId: chatId, title: "Neural Session", transcript: text, history, memories })
+          : await sendChatMessage({ sessionId: chatId, title: "Neural Session", message: text, attachments: files, history, memories });
+
+      await addDoc(collection(db, `users/${user.uid}/chats/${chatId}/messages`), {
+        ...payload.assistantMessage,
+        timestamp: payload.assistantMessage.timestamp || serverTimestamp(),
       });
 
-      const apiAttachments = await Promise.all(
-        files.map(async (file) => {
-          const reader = new FileReader();
-          const base64Promise = new Promise<string>((resolve) => {
-            reader.onload = () => resolve((reader.result as string).split(",")[1]);
-          });
-          reader.readAsDataURL(file);
-          const base64 = await base64Promise;
-          return { data: base64, mimeType: file.type, name: file.name };
-        })
-      );
-
-      const stream = await generateChatResponse(text, history, memories, apiAttachments);
-      let fullResponse = "";
-      
-      const messageRef = await addDoc(collection(db, `users/${user.uid}/chats/${currentChatId}/messages`), {
-        role: "assistant",
-        content: "...",
-        timestamp: serverTimestamp(),
-        chatId: currentChatId
+      await updateDoc(doc(db, `users/${user.uid}/chats/${chatId}`), {
+        title: payload.chat.title,
+        lastMessage: payload.assistantMessage.content,
+        updatedAt: payload.chat.updatedAt,
       });
 
-      for await (const chunk of stream) {
-        fullResponse += chunk.text;
-        await updateDoc(doc(db, `users/${user.uid}/chats/${currentChatId}/messages`, messageRef.id), {
-          content: fullResponse
-        });
+      setSuggestions(payload.quickReplies);
+      await persistAssistantArtifacts(chatId, payload.memories, payload.reminder);
+      if (view === "nexus" || source === "voice") {
+        speak(payload.assistantMessage.content);
       }
-
-      if (view === "nexus") {
-        speak(fullResponse);
-      }
-
-      const extracted = await extractMemories(text + " " + fullResponse);
-      if (extracted.length > 0) {
-        setMemoryNotification(extracted[0].key);
-        setTimeout(() => setMemoryNotification(null), 3000);
-      }
-      for (const m of extracted) {
-        await addDoc(collection(db, `users/${user.uid}/memories`), {
-          ...m,
-          timestamp: serverTimestamp()
-        });
-      }
-
-      // Reminder Intent Handling
-      const reminderData = await extractReminder(text + " " + fullResponse);
-      if (reminderData && reminderData.task) {
-        if (reminderData.dateTime) {
-          await addDoc(collection(db, `users/${user.uid}/reminders`), {
-            userId: user.uid,
-            task: reminderData.task,
-            dateTime: reminderData.dateTime,
-            status: "pending",
-            createdAt: serverTimestamp()
-          });
-          
-          await addDoc(collection(db, `users/${user.uid}/chats/${currentChatId}/messages`), {
-            role: "assistant",
-            content: `LINKED. I've secured your reminder: "${reminderData.task}" for ${new Date(reminderData.dateTime).toLocaleString()}.`,
-            timestamp: serverTimestamp(),
-            chatId: currentChatId
-          });
-        }
-      }
-      
-      const updatedHistory = [...history, { role: "model" as const, parts: [{ text: fullResponse }] }];
-      const nextSuggestions = await generateQuickReplies(updatedHistory);
-      setSuggestions(nextSuggestions);
-
     } catch (error) {
-      console.error("AI Error:", error);
+      setErrorMessage(error instanceof Error ? error.message : "Failed to complete the request.");
     } finally {
       setIsTyping(false);
+      setIsSending(false);
+      setPendingFiles([]);
+      if (source === "chat") {
+        setInputText("");
+      }
     }
+  };
+
+  const handleSendMessage = async (overrideText?: string) => {
+    const textToSend = overrideText || inputText;
+    const files = [...pendingFiles];
+    await processTurn(textToSend, files, "chat");
+  };
+
+  voiceTranscriptHandlerRef.current = async (finalTranscript: string) => {
+    setTranscriptHistory((current) => [finalTranscript, ...current].slice(0, 6));
+    await processTurn(finalTranscript, [], "voice");
+    setTranscript("");
   };
 
   const handleTransmissionAction = (actionText: string) => {
@@ -429,9 +531,21 @@ export default function App() {
 
   const createNewChat = async () => {
     if (!user) return;
+    stopListening();
+    window.speechSynthesis?.cancel();
+    setPendingFiles([]);
+    setInputText("");
+    setSuggestions([]);
+    setMessages([]);
+    setTranscript("");
+    setTranscriptHistory([]);
+    setView("chronicle");
+    setIsTyping(false);
+    setErrorMessage(null);
     const newChatRef = await addDoc(collection(db, `users/${user.uid}/chats`), {
       userId: user.uid,
       title: "New Transmission",
+      lastMessage: "",
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -510,8 +624,35 @@ export default function App() {
             <Lucide.PlusCircle className="w-5 h-5 shrink-0" />
             <span className="hidden sm:inline">New Chat</span>
           </button>
-          <button onClick={() => alert("User Management Active")}><Lucide.User className="text-primary hover:scale-110 transition-transform cursor-pointer" /></button>
-          <button onClick={() => alert("Settings Active")}><Lucide.Settings className="text-primary hover:scale-110 transition-transform cursor-pointer" /></button>
+          <div className="relative">
+            <button onClick={() => { setShowProfileMenu((current) => !current); setShowSettingsPanel(false); }}>
+              <Lucide.User className="text-primary hover:scale-110 transition-transform cursor-pointer" />
+            </button>
+            <AnimatePresence>
+              {showProfileMenu && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  className="absolute right-0 mt-3 w-72 bg-surface-container border-4 border-black p-4 shadow-[6px_6px_0px_black] z-[70]"
+                >
+                  <div className="flex items-center gap-4">
+                    <img src={profileRef.current.avatar} alt={profileRef.current.name} className="w-14 h-14 rounded-full border-2 border-black object-cover" />
+                    <div className="min-w-0">
+                      <p className="font-black text-primary uppercase truncate">{profileRef.current.name}</p>
+                      <p className="text-xs text-on-surface-variant truncate">{profileRef.current.email}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 border-t-2 border-black pt-3 text-xs font-black uppercase tracking-widest text-secondary">
+                    Session ID: {currentChatId?.slice(0, 8) || "unlinked"}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+          <button onClick={() => { setShowSettingsPanel((current) => !current); setShowProfileMenu(false); }}>
+            <Lucide.Settings className="text-primary hover:scale-110 transition-transform cursor-pointer" />
+          </button>
         </div>
       </header>
 
@@ -526,6 +667,65 @@ export default function App() {
           >
             NAT Synchronized: {memoryNotification}
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {errorMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 140 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="fixed top-0 left-1/2 -translate-x-1/2 z-[60] bg-error text-background px-5 py-3 border-4 border-black font-black uppercase text-xs tracking-[0.2em] shadow-[8px_8px_0px_black]"
+          >
+            {errorMessage}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showSettingsPanel && (
+          <motion.aside
+            initial={{ opacity: 0, x: 24 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 24 }}
+            className="fixed top-24 right-6 z-[65] w-[min(24rem,calc(100vw-3rem))] bg-surface-container border-4 border-black p-6 shadow-[8px_8px_0px_black]"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="font-black uppercase tracking-widest text-primary">Settings</h3>
+              <button onClick={() => setShowSettingsPanel(false)}>
+                <Lucide.X className="w-5 h-5 text-on-surface" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <SettingRow
+                label="Dark Theme"
+                checked={settings.theme === "dark"}
+                onChange={(checked) => updateSetting("theme", checked ? "dark" : "light")}
+              />
+              <SettingRow
+                label="Voice Output"
+                checked={settings.voiceEnabled}
+                onChange={(checked) => updateSetting("voiceEnabled", checked)}
+              />
+              <SettingRow
+                label="Notifications"
+                checked={settings.notificationsEnabled}
+                onChange={async (checked) => {
+                  updateSetting("notificationsEnabled", checked);
+                  if (checked) {
+                    await requestNotifications();
+                  }
+                }}
+                meta={notificationPermission}
+              />
+              <SettingRow
+                label="Data Persistence"
+                checked={settings.dataPersistence}
+                onChange={(checked) => updateSetting("dataPersistence", checked)}
+              />
+            </div>
+          </motion.aside>
         )}
       </AnimatePresence>
 
@@ -596,14 +796,25 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="w-full h-full flex flex-col bg-background halftone-overlay"
+              className="w-full h-full min-h-0 flex flex-col bg-background halftone-overlay"
             >
-              <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 md:p-12 space-y-12 scrollbar-none pb-32">
+              <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-6 md:p-12 space-y-12 scrollbar-none pb-64">
                 <div className="flex justify-center">
                   <span className="bg-surface-container-high border-2 border-black text-secondary px-4 py-1 font-black text-xs tracking-[0.2em] uppercase kinetic-tilt shadow-[4px_4px_0px_black]">
                     Epoch: Transmission_{currentChatId?.slice(0, 3) || "001"}
                   </span>
                 </div>
+                {messages.length === 0 && (
+                  <MessageBubble
+                    message={{
+                      id: "default-greeting",
+                      role: "assistant",
+                      content: "NAT online. I can help with tasks, reminders, brainstorming, memory capture, and voice conversations.",
+                      timestamp: serverTimestamp(),
+                      chatId: currentChatId || "default",
+                    }}
+                  />
+                )}
                 {messages.map((m) => (
                   // @ts-ignore
                   <MessageBubble key={m.id} message={m} />
@@ -622,7 +833,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-              <div className="absolute bottom-0 left-0 w-full p-6 md:p-10">
+              <div ref={inputBarRef} className="sticky bottom-0 left-0 z-20 w-full p-6 md:p-10 bg-gradient-to-t from-background via-background/95 to-transparent">
                 <div className="max-w-4xl mx-auto w-full relative">
                   {/* Suggestions Area */}
                   <AnimatePresence>
@@ -637,6 +848,7 @@ export default function App() {
                           <button
                             key={i}
                             onClick={() => handleSendMessage(s)}
+                            disabled={isSending}
                             className={`bg-surface-container-high border-2 border-black px-4 py-2 font-black text-[10px] tracking-widest uppercase ink-stroke hover:bg-primary hover:text-ink transition-all cursor-pointer ${i % 2 === 0 ? "kinetic-tilt" : "kinetic-tilt-alt"}`}
                           >
                             {s}
@@ -687,19 +899,24 @@ export default function App() {
                       <input 
                         value={inputText}
                         onChange={(e) => setInputText(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleSendMessage();
+                          }
+                        }}
                         className="bg-transparent border-none focus:ring-0 text-on-surface font-black uppercase tracking-widest placeholder:text-outline-variant/50 py-2 px-4 text-sm" 
-                        placeholder={uploading ? "UPLOADING PROTOCOLS..." : "WRITE YOUR STORY..."} 
-                        disabled={uploading}
+                        placeholder={uploading ? "UPLOADING PROTOCOLS..." : isSending ? "NAT IS RESPONDING..." : "WRITE YOUR STORY..."} 
+                        disabled={uploading || isSending}
                       />
                     </div>
 
                     <button 
                       onClick={() => handleSendMessage()} 
-                      disabled={uploading}
+                      disabled={uploading || isSending}
                       className="bg-tertiary text-background w-14 h-14 rounded-full flex items-center justify-center border-4 border-black shadow-[4px_4px_0px_black] active:translate-x-1 active:translate-y-1 active:shadow-none transition-all hover:scale-110 disabled:grayscale disabled:opacity-50"
                     >
-                      {uploading ? <Lucide.Loader2 className="w-7 h-7 animate-spin" /> : <Lucide.Send className="w-7 h-7" />}
+                      {uploading || isSending ? <Lucide.Loader2 className="w-7 h-7 animate-spin" /> : <Lucide.Send className="w-7 h-7" />}
                     </button>
                   </div>
                 </div>
@@ -817,37 +1034,15 @@ export default function App() {
                   <div className="absolute inset-0 bg-primary/20 blur-[80px] rounded-full scale-150 animate-pulse" />
                   <div className="w-64 h-64 md:w-80 md:h-80 bg-gradient-to-br from-primary to-primary-dim rounded-full flex items-center justify-center border-4 border-black ink-stroke kinetic-tilt relative overflow-hidden group">
                     <div className="absolute inset-0 opacity-10 halftone-overlay pointer-events-none" />
-                    <div className="flex gap-8 relative z-20">
-                      <motion.div 
-                        animate={
-                          isListening
-                            ? { height: [50, 90, 50], transition: { repeat: Infinity, duration: 1.5, ease: "easeInOut" } }
-                            : isTyping
-                            ? { height: 40, y: -10, transition: { duration: 0.3 } }
-                            : { 
-                                height: [60, 60, 10, 60, 60, 60, 10, 60],
-                                y: [0, 0, 0, 0, 5, 5, 0, 0],
-                                x: [0, -5, -5, 5, 5, 0, 0, 0]
-                              }
-                        }
-                        transition={!isListening && !isTyping ? { repeat: Infinity, duration: 6, ease: "easeInOut", times: [0, 0.05, 0.1, 0.15, 0.3, 0.5, 0.55, 1] } : undefined}
-                        className="w-12 bg-background rounded-full border-4 border-black origin-center" 
-                      />
-                      <motion.div 
-                        animate={
-                          isListening
-                            ? { height: [50, 90, 50], transition: { repeat: Infinity, duration: 1.5, ease: "easeInOut", delay: 0.1 } }
-                            : isTyping
-                            ? { height: 40, y: -10, transition: { duration: 0.3 } }
-                            : { 
-                                height: [60, 60, 10, 60, 60, 60, 10, 60],
-                                y: [0, 0, 0, 0, 5, 5, 0, 0],
-                                x: [0, -5, -5, 5, 5, 0, 0, 0]
-                              }
-                        }
-                        transition={!isListening && !isTyping ? { repeat: Infinity, duration: 6, ease: "easeInOut", times: [0, 0.05, 0.1, 0.15, 0.3, 0.5, 0.55, 1] } : undefined}
-                        className="w-12 bg-background rounded-full border-4 border-black origin-center" 
-                      />
+                    <div className="flex gap-5 relative z-20 items-end">
+                      {waveform.map((level, index) => (
+                        <motion.div
+                          key={index}
+                          animate={{ height: `${Math.max(18, Math.round(level * 120))}px` }}
+                          transition={{ duration: 0.18, ease: "easeOut" }}
+                          className="w-6 bg-background rounded-full border-4 border-black origin-center"
+                        />
+                      ))}
                     </div>
                   </div>
                   <div className="absolute -top-4 -right-8 bg-tertiary text-on-tertiary px-4 py-2 font-black italic rounded-none border-2 border-black rotate-6 ink-stroke">
@@ -868,8 +1063,10 @@ export default function App() {
                     color={isMuted ? "bg-primary" : "bg-secondary"} 
                     shadow="shadow-[0px_8px_0px_#500086]" 
                     onClick={() => {
-                        setIsMuted(!isMuted);
-                        if (!isMuted && isListening) toggleListening(); // Turn off mic if muting
+                        const nextMuted = !isMuted;
+                        setIsMuted(nextMuted);
+                        if (nextMuted && isListening) stopListening();
+                        if (!nextMuted && view === "nexus" && !isListening) toggleListening();
                     }} 
                   />
                   <NexusButton 
@@ -877,7 +1074,7 @@ export default function App() {
                     label="End Link" 
                     color="bg-error" 
                     shadow="shadow-[0px_8px_0px_#9f0519]" 
-                    onClick={() => { setView("chronicle"); setIsListening(false); }}
+                    onClick={() => { stopListening(); setTranscript(""); setView("chronicle"); }}
                     large 
                   />
                   <NexusButton 
@@ -893,10 +1090,34 @@ export default function App() {
                   <div className="bg-surface-container-high border-2 border-primary p-6 ink-stroke relative -rotate-1">
                     <div className="absolute -top-3 left-8 bg-primary text-background font-black text-xs px-2 py-1 uppercase tracking-tighter">Real-time Transcripts</div>
                     <p className="text-on-surface text-lg font-medium leading-tight">
-                    {isListening ? "NAT listening to your neural constructs..." : "Neural link established. Awaiting input."}
+                      {(transcript || interimTranscript) ? `${transcript} ${interimTranscript}`.trim() : isListening ? "NAT listening to your neural constructs..." : "Neural link established. Awaiting input."}
                     </p>
                     <div className="absolute -bottom-4 left-10 w-0 h-0 border-l-[15px] border-l-transparent border-t-[15px] border-t-primary border-r-[15px] border-r-transparent" />
                   </div>
+                  {transcriptHistory.length > 0 && (
+                    <div className="mt-6 bg-surface-container-low border-2 border-black p-4 space-y-2">
+                      {transcriptHistory.slice(0, 3).map((entry, index) => (
+                        <p key={`${entry}-${index}`} className="text-xs uppercase tracking-wide text-on-surface-variant">{entry}</p>
+                      ))}
+                    </div>
+                  )}
+                  {recordings.length > 0 && (
+                    <div className="mt-6 space-y-2">
+                      {recordings.slice(0, 2).map((recording) => (
+                        <audio key={recording.id} controls className="w-full">
+                          <source src={recording.url} />
+                        </audio>
+                      ))}
+                    </div>
+                  )}
+                  {!isListening && (
+                    <button
+                      onClick={toggleListening}
+                      className="mt-6 w-full bg-tertiary text-background border-4 border-black py-3 font-black uppercase tracking-widest shadow-[4px_4px_0px_black]"
+                    >
+                      Start Link
+                    </button>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -993,6 +1214,33 @@ function SidebarItem({ icon, label, active = false, onClick, collapsed = false }
       <span className="shrink-0">{icon}</span>
       <span className={collapsed ? "hidden" : "block"}>{label}</span>
     </button>
+  );
+}
+
+function SettingRow({
+  label,
+  checked,
+  onChange,
+  meta,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void | Promise<void>;
+  meta?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 border-2 border-black bg-surface-container-high p-3">
+      <div>
+        <p className="font-black uppercase tracking-widest text-sm text-primary">{label}</p>
+        {meta ? <p className="text-[10px] uppercase tracking-[0.2em] text-on-surface-variant mt-1">{meta}</p> : null}
+      </div>
+      <button
+        onClick={() => onChange(!checked)}
+        className={`w-14 h-8 border-2 border-black flex items-center px-1 transition-colors ${checked ? "bg-primary" : "bg-surface-container-low"}`}
+      >
+        <div className={`w-5 h-5 bg-black transition-transform ${checked ? "translate-x-6" : "translate-x-0"}`} />
+      </button>
+    </div>
   );
 }
 

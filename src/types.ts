@@ -43,6 +43,8 @@ export interface Reminder {
 export interface UserPreferences {
   theme?: string;
   voiceEnabled?: boolean;
+  notificationsEnabled?: boolean;
+  dataPersistence?: boolean;
   [key: string]: any;
 }
 
@@ -50,5 +52,6 @@ export interface UserProfile {
   userId: string;
   email: string;
   name?: string;
+  avatar?: string;
   preferences?: UserPreferences;
 }

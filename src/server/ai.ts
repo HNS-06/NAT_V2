@@ -15,6 +15,9 @@ type ChatAttachment = {
   name?: string;
 };
 
+export type AssistantHistoryEntry = ChatHistoryEntry;
+export type AssistantAttachment = ChatAttachment;
+
 type ProviderRuntime = {
   provider: AiProvider;
   apiKey: string;
@@ -951,4 +954,94 @@ ${JSON.stringify(history.slice(-6))}`;
       sendJsonError(response, error);
     }
   });
+}
+
+export async function runAssistantChat(input: {
+  provider?: string;
+  message: string;
+  history?: ChatHistoryEntry[];
+  memories?: Memory[];
+  attachments?: ChatAttachment[];
+}) {
+  const runtimes = resolveRuntimeProviders(input.provider);
+  const history = input.history || [];
+  const memories = input.memories || [];
+  const attachments = input.attachments || [];
+  const { runtime, stream } = await openChatStreamWithFallback(
+    runtimes,
+    input.message,
+    history,
+    memories,
+    attachments,
+  );
+
+  let text = "";
+  for await (const chunk of stream) {
+    text += chunk;
+  }
+
+  return {
+    text,
+    provider: runtime.provider,
+    model: runtime.chatModel,
+  };
+}
+
+export async function runMemoryExtraction(input: { provider?: string; text: string }) {
+  const runtimes = resolveRuntimeProviders(input.provider);
+  const prompt = `Extract important user preferences, goals, or habits from the following text.
+Return a JSON array of objects with exactly "key" and "value" string fields.
+Only include genuinely useful long-lived memory. If none exists, return [].
+
+Text:
+${input.text}`;
+  const { text } = await generateTextWithFallback(runtimes, prompt, "application/json");
+  return parseJsonResponse<Array<{ key: string; value: string }>>(text, []);
+}
+
+export async function runIntentDetection(input: { provider?: string; text: string }) {
+  const runtimes = resolveRuntimeProviders(input.provider);
+  const prompt = `Identify whether the text contains any of these intents:
+- CREATE_REMINDER
+- SEARCH_WEB
+- IMAGE_GEN
+- CALCULATE
+- PLAY_MODE
+- LISTENING_MODE
+- HELPER_MODE
+- MEMORY_MODE
+
+Return a JSON array of strings using only those labels. If none apply, return [].
+
+Text:
+${input.text}`;
+  const { text } = await generateTextWithFallback(runtimes, prompt, "application/json");
+  return parseJsonResponse<string[]>(text, []);
+}
+
+export async function runReminderExtraction(input: { provider?: string; text: string }) {
+  const runtimes = resolveRuntimeProviders(input.provider);
+  const prompt = `Analyze the text for a reminder intent.
+Use ${new Date().toISOString()} as the reference time for relative dates.
+Return either:
+- null
+- or a JSON object with "task" and "dateTime" fields, where "dateTime" is ISO 8601 or null if the time is missing.
+
+Text:
+${input.text}`;
+  const { text } = await generateTextWithFallback(runtimes, prompt, "application/json");
+  const parsed = parseJsonResponse<{ task?: string | null; dateTime?: string | null } | null>(text, null);
+  return parsed && parsed.task ? parsed : null;
+}
+
+export async function runQuickReplies(input: { provider?: string; history: ChatHistoryEntry[] }) {
+  const runtimes = resolveRuntimeProviders(input.provider);
+  const prompt = `Based on this conversation history, generate exactly 3 short, distinctive quick reply suggestions for the user.
+Match NAT's calm, adaptive, digital-companion persona.
+Return a JSON array of strings only.
+
+History:
+${JSON.stringify(input.history.slice(-6))}`;
+  const { text } = await generateTextWithFallback(runtimes, prompt, "application/json");
+  return parseJsonResponse<string[]>(text, []).slice(0, 3);
 }
