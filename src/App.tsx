@@ -572,6 +572,34 @@ export default function App() {
     alert("MEMORY_WIPED");
   };
 
+  const deleteChat = async (chatId: string) => {
+    if (!user) return;
+    // Delete all messages inside the chat first
+    const msgSnap = await getDocs(collection(db, `users/${user.uid}/chats/${chatId}/messages`));
+    for (const msgDoc of msgSnap.docs) {
+      await deleteDoc(msgDoc.ref);
+    }
+    // Delete the chat document itself
+    await deleteDoc(doc(db, `users/${user.uid}/chats`, chatId));
+    // If we deleted the active chat, reset or pick next
+    if (currentChatId === chatId) {
+      setMessages([]);
+      setCurrentChatId(null);
+    }
+  };
+
+  const deleteAllHistory = async () => {
+    if (!user) return;
+    const chatSnap = await getDocs(collection(db, `users/${user.uid}/chats`));
+    for (const chatDoc of chatSnap.docs) {
+      const msgSnap = await getDocs(collection(db, `users/${user.uid}/chats/${chatDoc.id}/messages`));
+      for (const msgDoc of msgSnap.docs) await deleteDoc(msgDoc.ref);
+      await deleteDoc(chatDoc.ref);
+    }
+    setMessages([]);
+    setCurrentChatId(null);
+  };
+
   if (!user) {
     return (
       <div className="h-screen flex items-center justify-center bg-background halftone-overlay">
@@ -752,21 +780,40 @@ export default function App() {
 
         <div className={`flex-1 overflow-hidden flex flex-col px-6 pb-2 ${view === "chronicle" ? "flex" : "hidden"}`}>
           <div className="flex-1 min-h-0 flex flex-col mb-6">
-            <h3 className="text-[10px] font-black text-primary/70 uppercase tracking-[0.2em] mb-2 flex items-center gap-2 shrink-0">
-              <Lucide.MessageSquare className="w-3 h-3" /> Previous Conversations
-            </h3>
+            <div className="flex items-center justify-between mb-2 shrink-0">
+              <h3 className="text-[10px] font-black text-primary/70 uppercase tracking-[0.2em] flex items-center gap-2">
+                <Lucide.MessageSquare className="w-3 h-3" /> Previous Conversations
+              </h3>
+              {chats.length > 0 && (
+                <button
+                  onClick={deleteAllHistory}
+                  title="Clear all history"
+                  className="text-[9px] font-black text-error/60 hover:text-error uppercase tracking-widest transition-colors flex items-center gap-1"
+                >
+                  <Lucide.Trash2 className="w-3 h-3" /> All
+                </button>
+              )}
+            </div>
             <div className="overflow-y-auto scrollbar-none space-y-1 pr-2 flex-1 min-h-0">
               {chats.length === 0 && (
                 <p className="text-[10px] text-on-surface-variant/50 uppercase italic py-1">No history</p>
               )}
               {chats.map(chat => (
-                <button
-                  key={chat.id}
-                  onClick={() => { setCurrentChatId(chat.id); setView("chronicle"); }}
-                  className={`w-full text-left truncate text-xs p-2 font-bold transition-all border-l-2 ${currentChatId === chat.id ? "bg-primary/20 text-primary border-primary" : "text-on-surface hover:bg-surface-container-high border-transparent"}`}
-                >
-                  {chat.title || "Neural Session"}
-                </button>
+                <div key={chat.id} className="group flex items-center">
+                  <button
+                    onClick={() => { setCurrentChatId(chat.id); setView("chronicle"); }}
+                    className={`flex-1 text-left truncate text-xs p-2 font-bold transition-all border-l-2 ${currentChatId === chat.id ? "bg-primary/20 text-primary border-primary" : "text-on-surface hover:bg-surface-container-high border-transparent"}`}
+                  >
+                    {chat.title || "Neural Session"}
+                  </button>
+                  <button
+                    onClick={() => deleteChat(chat.id)}
+                    title="Delete chat"
+                    className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 text-error/60 hover:text-error"
+                  >
+                    <Lucide.Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
