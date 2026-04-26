@@ -833,7 +833,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-              <div ref={inputBarRef} className="sticky bottom-0 left-0 z-20 w-full p-6 md:p-10 bg-gradient-to-t from-background via-background/95 to-transparent">
+              <div ref={inputBarRef} className="sticky bottom-0 left-0 z-20 w-full p-6 md:p-10 bg-gradient-to-t from-background/60 via-background/30 to-transparent">
                 <div className="max-w-4xl mx-auto w-full relative">
                   {/* Suggestions Area */}
                   <AnimatePresence>
@@ -858,7 +858,7 @@ export default function App() {
                     )}
                   </AnimatePresence>
 
-                  <div className="bg-surface-container-lowest border-4 border-black p-2 rounded-full shadow-[8px_8px_0px_black] flex items-center gap-2 group focus-within:ring-4 ring-primary/20">
+                  <div className="border-4 border-black p-2 rounded-full flex items-center gap-2 group focus-within:ring-4 ring-primary/20" style={{background:'rgba(0,0,0,0.25)',backdropFilter:'blur(12px)',WebkitBackdropFilter:'blur(12px)',border:'1px solid rgba(255,255,255,0.08)',boxShadow:'0 8px 30px rgba(0,0,0,0.25)'}}>
                     <input 
                       type="file" 
                       ref={fileInputRef} 
