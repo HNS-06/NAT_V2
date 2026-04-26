@@ -750,6 +750,49 @@ export default function App() {
           </nav>
         </div>
 
+        <div className={`flex-1 overflow-hidden flex flex-col px-6 pb-2 ${view === "chronicle" ? "flex" : "hidden"}`}>
+          <div className="flex-1 min-h-0 flex flex-col mb-6">
+            <h3 className="text-[10px] font-black text-primary/70 uppercase tracking-[0.2em] mb-2 flex items-center gap-2 shrink-0">
+              <Lucide.MessageSquare className="w-3 h-3" /> Previous Conversations
+            </h3>
+            <div className="overflow-y-auto scrollbar-none space-y-1 pr-2 flex-1 min-h-0">
+              {chats.length === 0 && (
+                <p className="text-[10px] text-on-surface-variant/50 uppercase italic py-1">No history</p>
+              )}
+              {chats.map(chat => (
+                <button
+                  key={chat.id}
+                  onClick={() => { setCurrentChatId(chat.id); setView("chronicle"); }}
+                  className={`w-full text-left truncate text-xs p-2 font-bold transition-all border-l-2 ${currentChatId === chat.id ? "bg-primary/20 text-primary border-primary" : "text-on-surface hover:bg-surface-container-high border-transparent"}`}
+                >
+                  {chat.title || "Neural Session"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="shrink-0 max-h-48 flex flex-col min-h-0">
+            <h3 className="text-[10px] font-black text-tertiary/70 uppercase tracking-[0.2em] mb-2 flex items-center gap-2 shrink-0">
+              <Lucide.Bell className="w-3 h-3" /> Scheduled Reminders
+            </h3>
+            <div className="overflow-y-auto scrollbar-none space-y-1 pr-2 min-h-0">
+              {reminders.length === 0 && (
+                <p className="text-[10px] text-on-surface-variant/50 uppercase italic py-1">No reminders</p>
+              )}
+              {reminders.map((r) => (
+                <div key={r.id} className="w-full text-left truncate text-[10px] p-2 font-bold text-on-surface border-l-2 border-tertiary/30 bg-surface-container-low mb-1 group flex items-start justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="uppercase truncate text-white">{r.task}</div>
+                    <div className="text-[8px] text-tertiary/70 mt-1">
+                      {r.dateTime ? new Date(r.dateTime).toLocaleString() : "Date-Pending"}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div className="mt-auto p-6 space-y-4">
           <button 
             onClick={wipeMemory}
