@@ -370,6 +370,24 @@ export default function App() {
       });
     }
   }, [user, currentChatId]);
+
+  useEffect(() => {
+    const bar = inputBarRef.current;
+    const scroller = scrollRef.current;
+    if (!bar || !scroller) return;
+
+    const sync = () => {
+      scroller.style.paddingBottom = `${bar.offsetHeight + 24}px`;
+      scroller.scrollTo({
+        top: scroller.scrollHeight,
+        behavior: "smooth",
+      });
+    };
+
+    const observer = new ResizeObserver(sync);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     if (voiceError) {
       setErrorMessage(voiceError);
@@ -1125,7 +1143,7 @@ export default function App() {
             >
               <div
                 ref={scrollRef}
-                className="flex-1 min-h-0 overflow-y-auto p-6 md:p-12 space-y-12 scrollbar-none pb-64"
+                className="flex-1 min-h-0 overflow-y-auto p-6 md:p-12 space-y-12 scrollbar-none"
               >
                 <div className="flex justify-center">
                   <span className="bg-surface-container-high border-2 border-black text-secondary px-4 py-1 font-black text-xs tracking-[0.2em] uppercase kinetic-tilt shadow-[4px_4px_0px_black]">
